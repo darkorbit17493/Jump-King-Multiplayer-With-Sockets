@@ -9,7 +9,6 @@ namespace JumpKingMultiplayer.Models
     internal class ProximityPlayers
     {
         Sprite sprite;
-        public int Threshold = 3;
 
         public ProximityPlayers()
         {
@@ -32,13 +31,6 @@ namespace JumpKingMultiplayer.Models
 
                 // on screen
                 if (ghost.ScreenIndex1 == Camera.CurrentScreenIndex1)
-                {
-                    continue;
-                }
-
-                // too far behind or ahead
-                if (ghost.ScreenIndex1 < Camera.CurrentScreenIndex1 - Threshold || 
-                    ghost.ScreenIndex1 > Camera.CurrentScreenIndex1 + Threshold)
                 {
                     continue;
                 }
