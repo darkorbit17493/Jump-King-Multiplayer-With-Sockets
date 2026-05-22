@@ -86,9 +86,9 @@ namespace JumpKingMultiplayer
 
         [PauseMenuItemSetting]
         [MainMenuItemSetting]
-        public static InviteToLobbyButton InviteToLobby(object factory, GuiFormat format)
+        public static JoinLobbyButton InviteToLobby(object factory, GuiFormat format)
         {
-            return new InviteToLobbyButton();
+            return new JoinLobbyButton();
         }
 
         [PauseMenuItemSetting]
