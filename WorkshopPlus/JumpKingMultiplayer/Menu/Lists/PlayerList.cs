@@ -98,7 +98,7 @@ namespace JumpKingMultiplayer.Menu.Lists
 
                 // add self
                 players_in_map.Add(new PlayerListItem(
-                    "You", MultiplayerManager.instance.UserSteamId, GameLoop.m_player.m_body
+                    "You", MultiplayerManager.myEndpoint, GameLoop.m_player.m_body
                 ));
 
                 // remove all and readd

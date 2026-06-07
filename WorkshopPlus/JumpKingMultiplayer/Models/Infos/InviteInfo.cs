@@ -70,17 +70,12 @@ namespace JumpKingMultiplayer.Models.Infos
 
         public void Accept()
         {
-            if (!id.HasValue) { return; }
-            MultiplayerManager.instance.JoinLobby(lobbyId.Value);
-            this.id = null;
-            this.lobbyId = null;
+            
         }
 
         public void Decline()
         {
-            if (!id.HasValue) { return; }
-            this.id = null;
-            this.lobbyId = null;
+            
         }
 
         public void Tick()

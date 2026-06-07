@@ -71,7 +71,6 @@ namespace JumpKingMultiplayer.Models.Infos
             if (!MultiplayerManager.IsOnline()) return;
             if (Keyboard.GetState().IsKeyDown(Keys.F4))
             {
-                SteamFriends.ActivateGameOverlayInviteDialog(MultiplayerManager.instance.LobbyId.Value);
                 if (ModEntry.Preferences.Tips.InviteF4Tip)
                 {
                     var tips = ModEntry.Preferences.Tips;

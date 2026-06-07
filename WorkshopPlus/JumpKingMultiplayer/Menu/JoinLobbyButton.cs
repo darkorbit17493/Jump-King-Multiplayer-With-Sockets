@@ -12,14 +12,14 @@ namespace JumpKingMultiplayer.Menu
 
         protected override bool CanChange()
         {
-            return true;
+            return MultiplayerManager.IsOnline();
         }
 
         protected override string GetName() => "Join Lobby";
 
         protected override void OnToggle()
         {
-            
+            MultiplayerManager.instance.JoinLobby();
         }
     }
 }

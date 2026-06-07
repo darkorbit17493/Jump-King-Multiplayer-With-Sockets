@@ -1,5 +1,6 @@
 ﻿using JumpKing.Player;
 using Microsoft.Xna.Framework;
+using System.Net;
 using static JumpKingMultiplayer.Models.GhostPlayer;
 
 namespace JumpKingMultiplayer.Models
@@ -10,8 +11,8 @@ namespace JumpKingMultiplayer.Models
         Vector2 RelativePosition { get; set; }
         Vector2 AbsolutePosition { get; set; }
         ulong? LevelId { get; set; }
-        string SteamName { get; set; }
-        Steamworks.CSteamID SteamId { get; set; }
+        string Name { get; set; }
+        IPEndPoint endpoint { get; set; }
         bool IsDisposed { get; set; }
         Color Color { get; set; }
     }

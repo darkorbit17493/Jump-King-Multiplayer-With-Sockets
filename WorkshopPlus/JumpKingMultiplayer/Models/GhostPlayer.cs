@@ -13,10 +13,10 @@ using Microsoft.Xna.Framework.Graphics;
 using static JumpKing.JKContentManager;
 using JumpKing.JKMemory;
 using JumpKingMultiplayer.Menu;
-using Steamworks;
 using JumpKingMultiplayer.Extensions;
 using JumpKingMultiplayer.Menu.Lists;
 using System.Diagnostics;
+using System.Net;
 
 namespace JumpKingMultiplayer.Models
 {
@@ -87,8 +87,8 @@ namespace JumpKingMultiplayer.Models
 
         public Tracker tracker { get; set; }
 
-        public string SteamName { get; set; }
-        public Steamworks.CSteamID SteamId { get; set; }
+        public string Name { get; set; }
+        public IPEndPoint endpoint { get; set; }
 
         public bool IsDisposed { get; set; } = false;
 
@@ -102,15 +102,15 @@ namespace JumpKingMultiplayer.Models
             this.tracker = new Tracker(this);
         }
 
-        public GhostPlayer(string tag, CSteamID steamID, int idx) : this()
+        public GhostPlayer(string tag, IPEndPoint endpoint, int idx) : this()
         {
-            this.SteamName = tag;
+            this.Name = tag;
             if (!Game1.instance.contentManager.font.MenuFontSmall.CanUseFontProperly(tag))
             {
-                this.SteamName = "Jumper";
+                this.Name = "Jumper";
             }
 
-            this.SteamId = steamID;
+            this.endpoint = endpoint;
             Color = ColorList[idx];
             base.SetSprite(Game1.instance.contentManager.playerSprites.idle);
             RelativePosition = new Vector2(-100f, -100f);
@@ -158,11 +158,11 @@ namespace JumpKingMultiplayer.Models
             if (!ModEntry.Preferences.IsLeaderboardEnabled) { return; }
             var color = Color * 0.7f;
             var charWidth = 2f;
-            var offsetChars = SteamName.Length * charWidth;
+            var offsetChars = Name.Length * charWidth;
 
             var textPos = this.RelativePosition - new Vector2((PlayerValues.PLAYER_WIDTH / 2f) + offsetChars, PlayerValues.PLAYER_HEIGHT + 18);
             TextHelper.DrawString(Game1.instance.contentManager.font.MenuFontSmall,
-                SteamName, textPos, color, Vector2.Zero);
+                Name, textPos, color, Vector2.Zero);
         }
 
         public static int frameNum = 0;

@@ -30,15 +30,6 @@ namespace JumpKingMultiplayer.Menu
             var lobby = ModEntry.Preferences.LobbySettings;
             lobby.OpenToJoin = !lobby.OpenToJoin;
             ModEntry.Preferences.LobbySettings = lobby;
-
-            if (lobby.OpenToJoin)
-            {
-                SteamMatchmaking.SetLobbyType(MultiplayerManager.instance.LobbyId.Value, ELobbyType.k_ELobbyTypePublic);
-            }
-            else
-            {
-                SteamMatchmaking.SetLobbyType(MultiplayerManager.instance.LobbyId.Value, ELobbyType.k_ELobbyTypePrivate);
-            }
         }
     }
 }

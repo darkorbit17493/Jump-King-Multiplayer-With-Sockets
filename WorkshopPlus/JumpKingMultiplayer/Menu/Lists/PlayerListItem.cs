@@ -8,8 +8,8 @@ using JumpKing.Util;
 using JumpKingMultiplayer.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using Steamworks;
 using System;
+using System.Net;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -25,7 +25,7 @@ namespace JumpKingMultiplayer.Menu.Lists
         internal IGhostPlayerData playerData;
         Sprite Sprite = Game1.instance.contentManager.Pixel.sprite;
         public PlayerListItem(IGhostPlayerData playerData)
-            : base(playerData.SteamName, Color.White)
+            : base(playerData.Name, Color.White)
         {
             Sprite.SetAlpha(0.25f);
             this.playerData = playerData;
@@ -35,15 +35,15 @@ namespace JumpKingMultiplayer.Menu.Lists
 
         BodyComp bodyComp;
         
-        public PlayerListItem(string steamName, CSteamID steamId, BodyComp bodyComp)
+        public PlayerListItem(string steamName, IPEndPoint endpoint, BodyComp bodyComp)
             : base(steamName, Color.White)
         {
             Sprite.SetAlpha(0.25f);
 
             playerData = new GhostPlayer
             {
-                SteamName = steamName,
-                SteamId = steamId,
+                Name = steamName,
+                endpoint = endpoint,
                 LevelId = PlayerSpriteStateExtensions.GetLevelId(),
                 Color = (ModEntry.Preferences.LobbySettings.PersonalColor == 0) 
                     ? Color.White 
@@ -70,12 +70,12 @@ namespace JumpKingMultiplayer.Menu.Lists
             Items[0] = new IconTextInfo(string.Empty, Game1.instance.contentManager.gui.Completed, playerData.Color * alpha, playerData.Color * alpha, yAlign: 4);
             
             // display name
-            Items[1] = new TextInfo(playerData.SteamName, color, Game1.instance.contentManager.font.MenuFontSmall);
+            Items[1] = new TextInfo(playerData.Name, color, Game1.instance.contentManager.font.MenuFontSmall);
             
             // owner badge
-            if (MultiplayerManager.instance.LobbyId.HasValue)
+            if (MultiplayerManager.IsOnline())
             {
-                if (MultiplayerManager.instance.LobbyOwner == playerData.SteamId)
+                if (MultiplayerManager.instance.AmILobbyOwner)
                 {
                     Items[2] = new IconTextInfo("", Sprite.CreateSprite(ModEntry.HostFlag), Color.DarkGreen);
                 }
