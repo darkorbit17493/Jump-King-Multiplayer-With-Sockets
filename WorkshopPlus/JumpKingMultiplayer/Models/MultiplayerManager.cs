@@ -136,7 +136,7 @@ namespace JumpKingMultiplayer.Models
             string name = ConfigName.Length > 0 ? ConfigName : DefaultPlayerName;
 
             Debug.WriteLine($"Your player name is {name}");
-            Debug.WriteLine($"Your ip:port is : ");
+            Debug.WriteLine($"Your ip:port is : {GetConfigHostEndPoint().Port}");
 
             if (ModEntry.Preferences.LobbySettings.CreateLobbyOnLaunch)
             {
@@ -192,16 +192,15 @@ namespace JumpKingMultiplayer.Models
             }
             if (unreadPackets)
             {
-                // FIXME possible suspect for corrupt data in UDP packet. Analyze the packets with Wireshark
                 ArraySegment<byte> buffer = new ArraySegment<byte>(new byte[200]);
-                IPEndPoint senderEndpoint = new IPEndPoint(GetConfigHostEndPoint().Address, 0);
-                EndPoint ep = (EndPoint)senderEndpoint;
+                IPEndPoint senderEndpoint = new IPEndPoint(IPAddress.Any, 0);
                 string messageStr;
                 try
                 {
-                    await gameUDPSocket.ReceiveFromAsync(buffer, SocketFlags.None, ep);
-                    messageStr = System.Text.Encoding.ASCII.GetString(buffer.Array);
-                    messageStr = messageStr.Substring(0, messageStr.IndexOf("}") + 1);
+                    SocketReceiveFromResult result = await gameUDPSocket.ReceiveFromAsync(buffer, SocketFlags.None, senderEndpoint);
+                    senderEndpoint = (IPEndPoint)result.RemoteEndPoint;
+                    
+                    messageStr = System.Text.Encoding.ASCII.GetString(buffer.Array).Trim(new char[] {(char)0});
 
                     TrackData trackData = Parser.FromString<TrackData>(messageStr);
                     UpdatePlayerGameplayState(senderEndpoint, trackData);
@@ -233,7 +232,7 @@ namespace JumpKingMultiplayer.Models
             }
             lock (_LobbyPlayersThreadLock)
             {
-                var player = Players[idx];
+                GhostPlayer player = Players[idx];
                 player.ScreenIndex1 = data.screenIndex1;
                 player.LevelId = data.levelId;
                 player.tracker.Track(data);
@@ -255,8 +254,6 @@ namespace JumpKingMultiplayer.Models
             }
         }
 
-
-
         internal LeaderBoard leaderBoard { get; set; }
         internal ProximityPlayers proximityPlayers { get; set; }
         internal InviteInfo inviteInfo { get; set; }
@@ -265,22 +262,51 @@ namespace JumpKingMultiplayer.Models
         private static string LeaveRequest = "Leave";
         private static string UpdateLobbyRequest = "UpdateLobby";
 
+        private static async void SendTCPData(Socket targetSocket, byte[] data) {
+            ArraySegment<byte> buffer = new ArraySegment<byte>(data);
+            
+            try
+            {
+                await targetSocket.SendAsync(buffer, SocketFlags.None);
+            } catch (SocketException e) {
+                Debug.WriteLine(e.Message);
+            }
+        }
+
         private static async void AcceptConnections() {
             while (IsOnline()) {
                 try
                 {
                     Socket client = await lobbyTCPSocket.AcceptAsync();
-                    lock (_LobbyPlayersThreadLock)
-                    {
-                        instance.PlayersTCPSockets.Add(client);
-                        instance.OtherLobbyPlayers.Add((IPEndPoint)client.RemoteEndPoint);
-                    }
+                    HandlePlayerConenction(client);
                 }
                 catch (SocketException e) {
                     Debug.WriteLine(e.Message);
                 }
                 catch (ObjectDisposedException e) {
                     Debug.WriteLine(e.Message);
+                }
+            }
+        }
+
+        private static void HandlePlayerConenction(Socket client) {
+            lock (_LobbyPlayersThreadLock)
+            {
+                instance.PlayersTCPSockets.Add(client);
+                instance.OtherLobbyPlayers.Add((IPEndPoint)client.RemoteEndPoint);
+
+                List<string> endpointsData = new List<string>();
+                
+                foreach (IPEndPoint endpoint in instance.OtherLobbyPlayers) {
+                    endpointsData.Add(endpoint.ToString());
+                }
+
+                string fullEndpointsData = Parser.ToString<List<string>>(endpointsData);
+
+                string message = UpdateLobbyRequest + "|" + fullEndpointsData;
+
+                foreach (Socket player in instance.PlayersTCPSockets) {
+                    SendTCPData(player, Encoding.ASCII.GetBytes(message));
                 }
             }
         }
@@ -293,11 +319,12 @@ namespace JumpKingMultiplayer.Models
                 string message = System.Text.Encoding.ASCII.GetString(buffer.Array).Trim(new char[] {(char)0});
 
                 if (message.Equals(LeaveRequest)) {
-                    MultiplayerManager.instance.LeaveLobby();
+                    instance.LeaveLobby();
                     return;
-                } else if (message.Contains(UpdateLobbyRequest)) { 
-                    string endpointsData = message.Substring(UpdateLobbyRequest.Length);
-                    MultiplayerManager.instance.UpdateLobbyMemberIds(endpointsData);
+                } else if (message.Contains(UpdateLobbyRequest)) {
+                    // Request length + 1 becuse of the separation token '|'
+                    string endpointsData = message.Substring(UpdateLobbyRequest.Length + 1);
+                    instance.UpdateLobbyMemberIds(endpointsData);
                 }
             }
         }
@@ -321,18 +348,23 @@ namespace JumpKingMultiplayer.Models
         public void UpdateLobbyMemberIds(string lobbyPlayersData)
         {
             List<IPEndPoint> updatedLobbyPlayers = new List<IPEndPoint>();
+            // The first lobby player in the list is always the host
+            updatedLobbyPlayers.Add((IPEndPoint)lobbyTCPSocket.RemoteEndPoint);
 
-            while (lobbyPlayersData.Contains("|")) {
-                int separatorIndex = lobbyPlayersData.IndexOf("|");
-                string data = lobbyPlayersData.Substring(0, separatorIndex - 1);
+            List<string> stringEndpoints = Parser.FromString<List<string>>(lobbyPlayersData);
 
-                int colonIndex = data.IndexOf(":");
-                IPAddress ip = IPAddress.Parse(data.Substring(0, colonIndex - 1));
-                int port = Int32.Parse(data.Substring(colonIndex + 1, separatorIndex - colonIndex));
+            foreach (string strEndpoint in stringEndpoints) {
+                int separationTokenIndex = strEndpoint.IndexOf(':');
+                string ip = strEndpoint.Substring(0, separationTokenIndex);
+                int port = Int32.Parse(strEndpoint.Substring(separationTokenIndex + 1));
 
-                updatedLobbyPlayers.Add(new IPEndPoint(ip, port));
+                IPEndPoint endpoint = new IPEndPoint(IPAddress.Parse(ip), port);
 
-                lobbyPlayersData = lobbyPlayersData.Substring(separatorIndex + 1);
+                if (endpoint.Equals(myEndpoint)) {
+                    continue;
+                }
+
+                updatedLobbyPlayers.Add(endpoint);
             }
 
             lock (_LobbyPlayersThreadLock)
@@ -343,13 +375,9 @@ namespace JumpKingMultiplayer.Models
             Debug.WriteLine($"[MP] Lobby members updated: {OtherLobbyPlayers.Count} players");
         }
 
-        private static void SetupUDPSocket(int port) {
+        private void InitUDPSocket() {
             gameUDPSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            gameUDPSocket.Bind(new IPEndPoint(GetConfigHostEndPoint().Address, port));
-        }
-
-        private static void SetupUDPSocket() {
-            SetupUDPSocket(0);
+            gameUDPSocket.ReceiveBufferSize = UDPReceiveBufferSize;
         }
 
         public void CreateLobby()
@@ -360,9 +388,13 @@ namespace JumpKingMultiplayer.Models
             IPEndPoint hostEndpoint = GetConfigHostEndPoint();
             int hostPort = hostEndpoint.Port;
 
-            // TODO: - Use this to etermine if password is needed -> ModEntry.Preferences.LobbySettings.OpenToJoin;
+            // TODO: - Use this to determine if password is needed -> ModEntry.Preferences.LobbySettings.OpenToJoin;
             lock (_LobbyPlayersThreadLock) {
-                SetupUDPSocket(hostPort);
+                InitUDPSocket();
+                
+                // Must have identical ip:port to the TCP socket since the clients use the tcp endpoint when they join to find this UDP one
+                gameUDPSocket.Bind(GetConfigHostEndPoint());
+                
                 instance.PlayersTCPSockets = new List<Socket>();
 
                 OtherLobbyPlayers = new List<IPEndPoint>();
@@ -384,7 +416,10 @@ namespace JumpKingMultiplayer.Models
 
             lock (_LobbyPlayersThreadLock)
             {
-                SetupUDPSocket();
+                InitUDPSocket();
+                // Putting 0 at prot number binds the socket to a free port it finds.
+                // The host then remembers the endpoint of this client and shares it with the others
+                gameUDPSocket.Bind(new IPEndPoint(GetConfigMyIP(), 0));
 
                 lobbyTCPSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
                 lobbyTCPSocket.Bind(myEndpoint);
@@ -393,9 +428,6 @@ namespace JumpKingMultiplayer.Models
             try
             {
                 await lobbyTCPSocket.ConnectAsync(hostEndpoint);
-                
-                // Adds the host as the first lobby player
-                OtherLobbyPlayers.Add((IPEndPoint)lobbyTCPSocket.RemoteEndPoint);
             }
             catch(SocketException e) {
                 Debug.WriteLine(e.Message);
@@ -442,30 +474,18 @@ namespace JumpKingMultiplayer.Models
             AmILobbyOwner = false;
         }
 
-        // TODO: - Repurpose these handlers to be called by dedicated TCP requests
-        public void HandlePlayerLeft(IPEndPoint endpoint)
-        {
-            Debug.WriteLine($"[MP] Player left " + endpoint.ToString() + ":" + endpoint.Port);
-            Players.Where(x => x.endpoint.Equals(endpoint)).ToList().ForEach(x => x.IsDisposed = true);
-            Players.RemoveAll(x => x.endpoint.Equals(endpoint));
-            OtherLobbyPlayers.Remove(endpoint);
-        }
-
-        public void HandlePlayerJoined(IPEndPoint endpoint)
-        {
-            Debug.WriteLine($"[MP] Player joined " + endpoint.Address.ToString() + ":" + endpoint.Port);
-        }
-
         private static string ConfigFileDirectory = Directory.GetCurrentDirectory() + "/Content/JKMods/MultiplayerMod/MultiplayerConfig.txt";
         
         private static string NameConfigLabel = "Name:";
         private static string HostIPConfigLabel = "HostIP:";
         private static string HostPortConfigLabel = "HostPort:";
+        private static string MyIPConfigLabel = "MyIP:";
         private static string HostPasswordConfigLabel = "Password:";
 
         private static string DefaultPlayerName = "Determined Jumper";
         private static string DefaultHostIP = "127.0.0.1";
         private static int DefaultHostPort = 3000;
+        private static string DefaultMyIP = "127.0.0.1";
         private static string DefaultHostPassword = "Pass123";
 
         // Used in lock statements to prevent racing conditions between multiple threads trying to act on LobbyPlayers
@@ -476,6 +496,7 @@ namespace JumpKingMultiplayer.Models
 
         // Handles gameplay networking mainly the sending/receiving of player's position and states
         private static Socket gameUDPSocket = null;
+        private static int UDPReceiveBufferSize = 2048;
 
         public static IPEndPoint myEndpoint => (IPEndPoint)gameUDPSocket.LocalEndPoint;
 
@@ -484,14 +505,15 @@ namespace JumpKingMultiplayer.Models
         public bool AmILobbyOwner = false;
 
         private static void RepairConfigFile() {
-            //FIXME: - Throws an exception for the file already being in use
             if (!File.Exists(ConfigFileDirectory))
             {
+                //FIXME: - Throws an exception for the file already being in use
                 File.Create(ConfigFileDirectory);
                 File.WriteAllText(ConfigFileDirectory, "=====CONFIG FILE=====\n" +
                     NameConfigLabel + DefaultPlayerName + "\n" +
                     HostIPConfigLabel + DefaultHostIP + "\n" +
                     HostPortConfigLabel + DefaultHostPort + "\n" +
+                    MyIPConfigLabel + DefaultMyIP + "\n" +
                     HostPasswordConfigLabel + DefaultHostPassword
                 );
             }
@@ -562,6 +584,25 @@ namespace JumpKingMultiplayer.Models
             }
 
             return null;
+        }
+
+        public static IPAddress GetConfigMyIP() {
+            RepairConfigFile();
+
+            string ip = "";
+
+            string[] lines = File.ReadAllLines(ConfigFileDirectory);
+
+            foreach (string line in lines)
+            {
+                int indexOfSubstring = line.IndexOf(MyIPConfigLabel);
+                if (indexOfSubstring >= 0)
+                {
+                    return IPAddress.Parse(line.Substring(indexOfSubstring + MyIPConfigLabel.Length));
+                }
+            }
+
+            return IPAddress.Parse(DefaultMyIP);
         }
 
         public static string GetConfigPassword() {

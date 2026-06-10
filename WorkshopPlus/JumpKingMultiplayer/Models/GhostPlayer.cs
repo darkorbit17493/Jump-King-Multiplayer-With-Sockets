@@ -26,7 +26,7 @@ namespace JumpKingMultiplayer.Models
         {
             GhostPlayer player;
 
-            public List<TrackData> data { get; set; } = new List<TrackData>();
+            private Queue<TrackData> data = new Queue<TrackData>();
 
             public Tracker(GhostPlayer player)
             {
@@ -37,7 +37,7 @@ namespace JumpKingMultiplayer.Models
             {
                 lock (data)
                 {
-                    data.Add(item);
+                    data.Enqueue(item);
                 }
             }
 
@@ -57,8 +57,7 @@ namespace JumpKingMultiplayer.Models
                         // sendUpdates = true;
                         return;
                     }
-                    frame = data[0];
-                    data.RemoveAt(0);
+                    frame = data.Dequeue();
                 }
                 replayFrameCount -= 1;
 
