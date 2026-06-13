@@ -19,7 +19,7 @@ namespace JumpKingMultiplayer.Menu
 
         protected override string GetName()
         {
-            return this.toggle ? "Leave Lobby" : "Create Lobby";
+            return MultiplayerManager.IsOnline() ? "Leave Lobby" : "Create Lobby";
         }
 
         protected override void OnToggle()

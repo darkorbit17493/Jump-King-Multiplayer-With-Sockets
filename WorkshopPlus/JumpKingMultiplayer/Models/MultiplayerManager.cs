@@ -117,13 +117,13 @@ namespace JumpKingMultiplayer.Models
         public static void DrawPlayers()
         {
             if (MultiplayerManager.instance._alreadyDrawedPlayers) { return; }
-            MultiplayerManager.instance.Players.ForEach(x => x.DrawFromOutside());
+            MultiplayerManager.instance.GhostPlayers.ForEach(x => x.DrawFromOutside());
             MultiplayerManager.instance._alreadyDrawedPlayers = true;
         }
 
         public static MultiplayerManager instance { get; set; }
 
-        internal List<GhostPlayer> Players = new List<GhostPlayer>();
+        internal List<GhostPlayer> GhostPlayers = new List<GhostPlayer>();
 
         internal TrackData lastTrackData = new TrackData { posX = 500, posY = 500, };
 
@@ -160,7 +160,7 @@ namespace JumpKingMultiplayer.Models
 
         public async void SendGameplayStateToAll<T>(T message)
         {
-            if (OtherLobbyPlayers.Count < 1) {
+            if (OtherPlayersEndpoints.Count < 1) {
                 return;
             }
             ArraySegment<byte> messageBytes;
@@ -174,9 +174,22 @@ namespace JumpKingMultiplayer.Models
                 return;
             }
             
-            foreach (IPEndPoint player in OtherLobbyPlayers)
+            foreach (IPEndPoint player in OtherPlayersEndpoints)
             {
-                await gameUDPSocket.SendToAsync(messageBytes, SocketFlags.None, (EndPoint)player);
+                try
+                {
+                    await gameUDPSocket.SendToAsync(messageBytes, SocketFlags.None, (EndPoint)player);
+                } catch (SocketException e) {
+                    if (!IsDisconnectingPlayer) {
+                        Debug.WriteLine(e.Message);
+                    }
+
+                    if (AmILobbyOwner) {
+                        HandleUndetectedClientDisconnection();
+                    }
+                } catch (Exception e) {
+                    Debug.WriteLine(e.Message);
+                }
             }
         }
 
@@ -210,7 +223,15 @@ namespace JumpKingMultiplayer.Models
                 catch (ArgumentNullException e) {
                     Debug.WriteLine(e.Message);
                 } catch (SocketException e){
-                    Debug.WriteLine(e.Message);
+                    if (!IsDisconnectingPlayer)
+                    {
+                        Debug.WriteLine(e.Message);
+                    }
+
+                    if (AmILobbyOwner)
+                    {
+                        HandleUndetectedClientDisconnection();
+                    }
                 }
 
                 // idk how to get the ping
@@ -224,15 +245,15 @@ namespace JumpKingMultiplayer.Models
 
         public void UpdatePlayerGameplayState(IPEndPoint endpoint, TrackData data)
         {
-            var idx = Players.FindIndex(x => x.endpoint.Equals(endpoint));
+            var idx = GhostPlayers.FindIndex(x => x.endpoint.Equals(endpoint));
             if (idx == -1)
             {
                 CreateGhostPlayer(endpoint, data);
-                idx = Players.Count - 1;
+                idx = GhostPlayers.Count - 1;
             }
             lock (_LobbyPlayersThreadLock)
             {
-                GhostPlayer player = Players[idx];
+                GhostPlayer player = GhostPlayers[idx];
                 player.ScreenIndex1 = data.screenIndex1;
                 player.LevelId = data.levelId;
                 player.tracker.Track(data);
@@ -250,8 +271,30 @@ namespace JumpKingMultiplayer.Models
             var color = data.colorIdx != 0 ? data.colorIdx : 1;
             lock (_LobbyPlayersThreadLock)
             {
-                Players.Add(new GhostPlayer(name, endpoint, color));
+                GhostPlayers.Add(new GhostPlayer(name, endpoint, color));
             }
+        }
+
+        private static void RemoveGhostPlayers(List<IPEndPoint> playersEndpoints)
+        {
+            List<GhostPlayer> updatedGhostPlayers = new List<GhostPlayer>();
+
+            foreach (IPEndPoint playerEndpoint in playersEndpoints) {
+                foreach (GhostPlayer player in instance.GhostPlayers)
+                {
+                    if (!player.endpoint.Equals(playerEndpoint))
+                    {
+                        updatedGhostPlayers.Add(player);
+                    }
+                }
+            }
+
+            instance.GhostPlayers = updatedGhostPlayers;
+        }
+
+        private static void RemoveGhostPlayer(IPEndPoint playerEndpoint)
+        {
+            RemoveGhostPlayers(new List<IPEndPoint> {playerEndpoint});
         }
 
         internal LeaderBoard leaderBoard { get; set; }
@@ -273,19 +316,22 @@ namespace JumpKingMultiplayer.Models
             }
         }
 
-        private static async void AcceptConnections() {
-            while (IsOnline()) {
-                try
-                {
-                    Socket client = await lobbyTCPSocket.AcceptAsync();
-                    HandlePlayerConenction(client);
-                }
-                catch (SocketException e) {
-                    Debug.WriteLine(e.Message);
-                }
-                catch (ObjectDisposedException e) {
-                    Debug.WriteLine(e.Message);
-                }
+        private static void SendLobbyUpdateRequestToEachClient()
+        {
+            List<string> endpointsData = new List<string>();
+
+            foreach (IPEndPoint endpoint in instance.OtherPlayersEndpoints)
+            {
+                endpointsData.Add(endpoint.ToString());
+            }
+
+            string JSONEndpointsData = Parser.ToString<List<string>>(endpointsData);
+
+            string message = UpdateLobbyRequest + "|" + JSONEndpointsData;
+
+            foreach (Socket player in instance.PlayersTCPSockets)
+            {
+                SendTCPData(player, Encoding.ASCII.GetBytes(message));
             }
         }
 
@@ -293,29 +339,109 @@ namespace JumpKingMultiplayer.Models
             lock (_LobbyPlayersThreadLock)
             {
                 instance.PlayersTCPSockets.Add(client);
-                instance.OtherLobbyPlayers.Add((IPEndPoint)client.RemoteEndPoint);
+                instance.OtherPlayersEndpoints.Add((IPEndPoint)client.RemoteEndPoint);
 
-                List<string> endpointsData = new List<string>();
-                
-                foreach (IPEndPoint endpoint in instance.OtherLobbyPlayers) {
-                    endpointsData.Add(endpoint.ToString());
+                SendLobbyUpdateRequestToEachClient();
+                ListenForClientRequests(client);
+            }
+        }
+
+        // When a client has requested to leave the lobby/left the game. The OS terminates the TCP connection on program close
+        // if the user forcefully closes the program.
+        private static void HandleStandardClientDisconenction(Socket client)
+        {
+            lock (_LobbyPlayersThreadLock)
+            {
+                instance.PlayersTCPSockets.Remove(client);
+                instance.OtherPlayersEndpoints.Remove((IPEndPoint)client.RemoteEndPoint);
+
+                RemoveGhostPlayer((IPEndPoint)client.RemoteEndPoint);
+            }
+
+            SendLobbyUpdateRequestToEachClient();
+        }
+
+        private static bool IsDisconnectingPlayer = false;
+        private static Object _DisconnectingPlayerThreadLock = new object();
+
+        // Handles a client disconnection when the OS has failed to terminate the TCP connection such as during a computer crash.
+        private static async void HandleUndetectedClientDisconnection()
+        {
+            // Allows only a single thread to be accessing this method at a time
+            lock (_DisconnectingPlayerThreadLock) {
+                if (IsDisconnectingPlayer) {
+                    return;
                 }
 
-                string fullEndpointsData = Parser.ToString<List<string>>(endpointsData);
+                IsDisconnectingPlayer = true;
+            }
 
-                string message = UpdateLobbyRequest + "|" + fullEndpointsData;
+            Debug.WriteLine("Searching for disconnected players");
 
-                foreach (Socket player in instance.PlayersTCPSockets) {
-                    SendTCPData(player, Encoding.ASCII.GetBytes(message));
+            List<Socket> updatedPlayersTCPSockets = new List<Socket>();
+            List<IPEndPoint> updatedOtherLobbyPlayers = new List<IPEndPoint>();
+            
+            foreach (Socket player in instance.PlayersTCPSockets)
+            {
+                try {
+                    // Sending a test packet to see if the player socket is connected or not
+                    ArraySegment<byte> buffer = new ArraySegment<byte>(new byte[] { 0 });
+                    await player.SendAsync(buffer, SocketFlags.None);
+                    if (player.Connected)
+                    {
+                        updatedPlayersTCPSockets.Add(player);
+                        updatedOtherLobbyPlayers.Add((IPEndPoint)player.RemoteEndPoint);
+                    }
+                } catch (SocketException e) {
+                    Debug.WriteLine(e.Message);
+                }
+            }
+
+            lock (_LobbyPlayersThreadLock) {
+                lock (_DisconnectingPlayerThreadLock) {
+                    instance.PlayersTCPSockets = updatedPlayersTCPSockets;
+                    instance.OtherPlayersEndpoints = updatedOtherLobbyPlayers;
+
+                    SendLobbyUpdateRequestToEachClient();
+
+                    IsDisconnectingPlayer = false;
                 }
             }
         }
 
-        private static async void ListenForHost() {
+        private static async void AcceptClientConnections()
+        {
+            while (IsOnline())
+            {
+                try
+                {
+                    Socket client = await lobbyTCPSocket.AcceptAsync();
+                    HandlePlayerConenction(client);
+                }
+                catch (SocketException e)
+                {
+                    Debug.WriteLine(e.Message);
+                }
+                catch (ObjectDisposedException e)
+                {
+                    Debug.WriteLine(e.Message);
+                }
+            }
+        }
+
+        private static async void ListenForHostRequests() {
             while (IsOnline()){
                 ArraySegment<byte> buffer = new ArraySegment<byte>(new byte[200]);
-                await lobbyTCPSocket.ReceiveAsync(buffer, SocketFlags.None);
-
+                try
+                {
+                    await lobbyTCPSocket.ReceiveAsync(buffer, SocketFlags.None);
+                }
+                catch (SocketException e)
+                {
+                    Debug.WriteLine(e.Message);
+                    instance.LeaveLobby();
+                    return;
+                }
                 string message = System.Text.Encoding.ASCII.GetString(buffer.Array).Trim(new char[] {(char)0});
 
                 if (message.Equals(LeaveRequest)) {
@@ -324,7 +450,27 @@ namespace JumpKingMultiplayer.Models
                 } else if (message.Contains(UpdateLobbyRequest)) {
                     // Request length + 1 becuse of the separation token '|'
                     string endpointsData = message.Substring(UpdateLobbyRequest.Length + 1);
-                    instance.UpdateLobbyMemberIds(endpointsData);
+                    instance.UpdateOtherLobbyMembers(endpointsData);
+                }
+            }
+        }
+
+        private static async void ListenForClientRequests(Socket client) {
+            while (IsOnline() && client.Connected) {
+                ArraySegment<byte> buffer = new ArraySegment<byte>(new byte[200]);
+                try
+                {
+                    await client.ReceiveAsync(buffer, SocketFlags.None);
+                } catch (SocketException e) {
+                    HandleStandardClientDisconenction(client);
+                    return;
+                }
+
+                string message = System.Text.Encoding.ASCII.GetString(buffer.Array).Trim(new char[] { (char)0 });
+
+                if (message.Contains(LeaveRequest)) {
+                    HandleStandardClientDisconenction(client);
+                    return;
                 }
             }
         }
@@ -345,34 +491,46 @@ namespace JumpKingMultiplayer.Models
             }
         }
 
-        public void UpdateLobbyMemberIds(string lobbyPlayersData)
+        public void UpdateOtherLobbyMembers(string lobbyPlayersEndpoints)
         {
-            List<IPEndPoint> updatedLobbyPlayers = new List<IPEndPoint>();
-            // The first lobby player in the list is always the host
-            updatedLobbyPlayers.Add((IPEndPoint)lobbyTCPSocket.RemoteEndPoint);
-
-            List<string> stringEndpoints = Parser.FromString<List<string>>(lobbyPlayersData);
-
-            foreach (string strEndpoint in stringEndpoints) {
-                int separationTokenIndex = strEndpoint.IndexOf(':');
-                string ip = strEndpoint.Substring(0, separationTokenIndex);
-                int port = Int32.Parse(strEndpoint.Substring(separationTokenIndex + 1));
-
-                IPEndPoint endpoint = new IPEndPoint(IPAddress.Parse(ip), port);
-
-                if (endpoint.Equals(myEndpoint)) {
-                    continue;
-                }
-
-                updatedLobbyPlayers.Add(endpoint);
-            }
-
             lock (_LobbyPlayersThreadLock)
             {
-                OtherLobbyPlayers.Clear();
-                OtherLobbyPlayers = updatedLobbyPlayers;
+                List<IPEndPoint> updatedLobbyPlayers = new List<IPEndPoint>();
+                // The first lobby player in the list is always the host
+                updatedLobbyPlayers.Add((IPEndPoint)lobbyTCPSocket.RemoteEndPoint);
+
+                List<GhostPlayer> updatedGhostPlayers = new List<GhostPlayer>();
+
+                List<string> stringEndpoints = Parser.FromString<List<string>>(lobbyPlayersEndpoints);
+
+                foreach (string strEndpoint in stringEndpoints) {
+                    int separationTokenIndex = strEndpoint.IndexOf(':');
+                    string ip = strEndpoint.Substring(0, separationTokenIndex);
+                    int port = Int32.Parse(strEndpoint.Substring(separationTokenIndex + 1));
+
+                    IPEndPoint endpoint = new IPEndPoint(IPAddress.Parse(ip), port);
+
+                    if (endpoint.Equals(myEndpoint)) {
+                        continue;
+                    }
+
+                    updatedLobbyPlayers.Add(endpoint);
+
+                    foreach (GhostPlayer ghostPlayer in GhostPlayers) {
+                        if (ghostPlayer.endpoint.Equals(endpoint)) { 
+                            updatedGhostPlayers.Add(ghostPlayer);
+                        }
+                    }
+                }
+
+                OtherPlayersEndpoints.Clear();
+                OtherPlayersEndpoints = updatedLobbyPlayers;
+
+                GhostPlayers.Clear();
+                GhostPlayers = updatedGhostPlayers;
+
+                Debug.WriteLine($"[MP] Lobby members updated: {OtherPlayersEndpoints.Count} players");
             }
-            Debug.WriteLine($"[MP] Lobby members updated: {OtherLobbyPlayers.Count} players");
         }
 
         private void InitUDPSocket() {
@@ -397,7 +555,7 @@ namespace JumpKingMultiplayer.Models
                 
                 instance.PlayersTCPSockets = new List<Socket>();
 
-                OtherLobbyPlayers = new List<IPEndPoint>();
+                OtherPlayersEndpoints = new List<IPEndPoint>();
             }
 
             leaderBoard = new LeaderBoard();
@@ -407,7 +565,7 @@ namespace JumpKingMultiplayer.Models
             lobbyTCPSocket.Bind(hostEndpoint);
             lobbyTCPSocket.Listen(10);
 
-            AcceptConnections();
+            AcceptClientConnections();
         }
 
         public async void JoinLobby()
@@ -436,7 +594,7 @@ namespace JumpKingMultiplayer.Models
 
             // TODO: - Send password to the host so that it doesn't reject the connection
 
-            ListenForHost();
+            ListenForHostRequests();
         }
 
         public void LeaveLobby()
@@ -447,23 +605,20 @@ namespace JumpKingMultiplayer.Models
             if (AmILobbyOwner)
             {
                 OnOwnerLeave();
-            }
-            else {
+            } else {
                 try {
-                    byte[] buffer = Encoding.ASCII.GetBytes(LeaveRequest);
-                    lobbyTCPSocket.Send(buffer);
+                    lobbyTCPSocket.SendTimeout = 2000;
+                    lobbyTCPSocket.Send(Encoding.ASCII.GetBytes(LeaveRequest));
+                    lobbyTCPSocket.Shutdown(SocketShutdown.Both);
+                    lobbyTCPSocket.Disconnect(false);
                 } catch (SocketException e) {
                     Debug.WriteLine(e);
                 }
             }
 
-            Players.ForEach(x => x.IsDisposed = true);
-            Players.Clear();
-            OtherLobbyPlayers.Clear();
-
-            if (lobbyTCPSocket.Connected) {
-                lobbyTCPSocket.Disconnect(true);
-            }
+            GhostPlayers.ForEach(x => x.IsDisposed = true);
+            GhostPlayers.Clear();
+            OtherPlayersEndpoints.Clear();
 
             lobbyTCPSocket.Dispose();
             lobbyTCPSocket = null;
@@ -501,7 +656,7 @@ namespace JumpKingMultiplayer.Models
         public static IPEndPoint myEndpoint => (IPEndPoint)gameUDPSocket.LocalEndPoint;
 
         private List<Socket> PlayersTCPSockets = new List<Socket>();
-        private List<IPEndPoint> OtherLobbyPlayers = new List<IPEndPoint>();
+        private List<IPEndPoint> OtherPlayersEndpoints = new List<IPEndPoint>();
         public bool AmILobbyOwner = false;
 
         private static void RepairConfigFile() {

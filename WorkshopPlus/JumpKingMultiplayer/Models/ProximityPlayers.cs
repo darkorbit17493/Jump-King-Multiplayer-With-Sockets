@@ -21,7 +21,7 @@ namespace JumpKingMultiplayer.Models
                 return;
             }
 
-            foreach (IGhostPlayerData ghost in MultiplayerManager.instance.Players)
+            foreach (IGhostPlayerData ghost in MultiplayerManager.instance.GhostPlayers)
             {
                 // not in this level
                 if (ghost.IsDisposed || ghost.LevelId != PlayerSpriteStateExtensions.GetLevelId())

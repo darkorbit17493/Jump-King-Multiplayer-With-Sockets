@@ -67,7 +67,7 @@ namespace JumpKingMultiplayer.Menu.Lists
             if (m_timer > RefreshTime && Keyboard.GetState().IsKeyDown(Keys.Tab))
             {
                 m_timer = 0;
-                var players = MultiplayerManager.instance.Players
+                var players = MultiplayerManager.instance.GhostPlayers
                 //    //.Where(x => x.IsDisposed == false) // this is rather useless to keep commented
                     .Where(x => x.LevelId == PlayerSpriteStateExtensions.GetLevelId())
                     .ToList();
@@ -109,9 +109,9 @@ namespace JumpKingMultiplayer.Menu.Lists
 
                 // other maps
 #if true
-                if (players.Count != MultiplayerManager.instance.Players.Count)
+                if (players.Count != MultiplayerManager.instance.GhostPlayers.Count)
                 {
-                    var playersinothermaps = MultiplayerManager.instance.Players
+                    var playersinothermaps = MultiplayerManager.instance.GhostPlayers
                         .Where(x => x.LevelId != PlayerSpriteStateExtensions.GetLevelId())
                         .ToList();
 
